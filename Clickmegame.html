@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clicker Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+            padding: 20px;
+        }
+        
+        .game-container {
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5rem;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1rem;
+        }
+        
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+            background-color: #f0f0f0;
+            padding: 15px;
+            border-radius: 10px;
+        }
+        
+        .stat {
+            flex: 1;
+        }
+        
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #2575fc;
+        }
+        
+        .stat-label {
+            font-size: 0.9rem;
+            color: #666;
+            margin-top: 5px;
+        }
+        
+        .game-area {
+            position: relative;
+            height: 300px;
+            background-color: #f8f9fa;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            overflow: hidden;
+            border: 3px dashed #ddd;
+        }
+        
+        .target {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            background: radial-gradient(circle, #ff416c, #ff4b2b);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            transition: transform 0.1s;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+        
+        .target:hover {
+            transform: scale(1.1);
+        }
+        
+        .target:active {
+            transform: scale(0.9);
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        #start-btn {
+            background-color: #4CAF50;
+            color: white;
+        }
+        
+        #reset-btn {
+            background-color: #f44336;
+            color: white;
+        }
+        
+        button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 10px rgba(0, 0, 0, 0.2);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .message {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 8px;
+            font-weight: bold;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .upgrade {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e7f3ff;
+            border-radius: 10px;
+            text-align: left;
+        }
+        
+        .upgrade h3 {
+            margin-bottom: 10px;
+            color: #2575fc;
+        }
+        
+        .upgrade-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 10px 0;
+            padding: 10px;
+            background-color: white;
+            border-radius: 8px;
+        }
+        
+        .upgrade-btn {
+            padding: 8px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .upgrade-btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <h1>Click Master</h1>
+        <p class="subtitle">Click the target as many times as you can in 30 seconds!</p>
+        
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-value" id="score">0</div>
+                <div class="stat-label">SCORE</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="time">30</div>
+                <div class="stat-label">TIME LEFT</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="clicks">0</div>
+                <div class="stat-label">CLICKS</div>
+            </div>
+        </div>
+        
+        <div class="game-area" id="game-area">
+            <div class="target" id="target">CLICK ME!</div>
+        </div>
+        
+        <div class="controls">
+            <button id="start-btn">START GAME</button>
+            <button id="reset-btn">RESET</button>
+        </div>
+        
+        <div class="message" id="message"></div>
+        
+        <div class="upgrade">
+            <h3>Upgrades</h3>
+            <div class="upgrade-item">
+                <div>
+                    <strong>Auto-Clicker</strong><br>
+                    <small>Automatically clicks every 3 seconds</small>
+                </div>
+                <button class="upgrade-btn" id="auto-clicker" disabled>50 Points</button>
+            </div>
+            <div class="upgrade-item">
+                <div>
+                    <strong>Double Points</strong><br>
+                    <small>Get 2 points per click</small>
+                </div>
+                <button class="upgrade-btn" id="double-points" disabled>100 Points</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Game variables
+        let score = 0;
+        let timeLeft = 30;
+        let clicks = 0;
+        let gameActive = false;
+        let timer;
+        let autoClickerActive = false;
+        let doublePointsActive = false;
+        
+        // DOM elements
+        const scoreElement = document.getElementById('score');
+        const timeElement = document.getElementById('time');
+        const clicksElement = document.getElementById('clicks');
+        const target = document.getElementById('target');
+        const startBtn = document.getElementById('start-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const messageElement = document.getElementById('message');
+        const gameArea = document.getElementById('game-area');
+        const autoClickerBtn = document.getElementById('auto-clicker');
+        const doublePointsBtn = document.getElementById('double-points');
+        
+        // Event listeners
+        startBtn.addEventListener('click', startGame);
+        resetBtn.addEventListener('click', resetGame);
+        target.addEventListener('click', handleTargetClick);
+        autoClickerBtn.addEventListener('click', purchaseAutoClicker);
+        doublePointsBtn.addEventListener('click', purchaseDoublePoints);
+        
+        // Game functions
+        function startGame() {
+            if (gameActive) return;
+            
+            gameActive = true;
+            startBtn.disabled = true;
+            score = 0;
+            timeLeft = 30;
+            clicks = 0;
+            updateDisplay();
+            
+            // Start timer
+            timer = setInterval(() => {
+                timeLeft--;
+                updateDisplay();
+                
+                if (timeLeft <= 0) {
+                    endGame();
+                }
+            }, 1000);
+            
+            // Move target to random position
+            moveTarget();
+            
+            // Show message
+            showMessage("Game started! Click the target as fast as you can!", "success");
+        }
+        
+        function resetGame() {
+            clearInterval(timer);
+            gameActive = false;
+            startBtn.disabled = false;
+            score = 0;
+            timeLeft = 30;
+            clicks = 0;
+            autoClickerActive = false;
+            doublePointsActive = false;
+            updateDisplay();
+            
+            // Reset upgrades
+            autoClickerBtn.disabled = true;
+            doublePointsBtn.disabled = true;
+            
+            // Center target
+            target.style.top = "50%";
+            target.style.left = "50%";
+            target.style.transform = "translate(-50%, -50%)";
+            
+            showMessage("Game reset. Click START to play again!", "success");
+        }
+        
+        function handleTargetClick() {
+            if (!gameActive) return;
+            
+            clicks++;
+            
+            // Calculate points (1 point normally, 2 if upgrade purchased)
+            let points = doublePointsActive ? 2 : 1;
+            score += points;
+            
+            updateDisplay();
+            moveTarget();
+            
+            // Visual feedback
+            target.style.transform = "scale(0.9)";
+            setTimeout(() => {
+                target.style.transform = "scale(1)";
+            }, 100);
+            
+            // Check for upgrades availability
+            checkUpgrades();
+        }
+        
+        function moveTarget() {
+            if (!gameActive) return;
+            
+            const gameRect = gameArea.getBoundingClientRect();
+            const targetRect = target.getBoundingClientRect();
+            
+            // Calculate max positions to keep target fully inside game area
+            const maxX = gameRect.width - targetRect.width;
+            const maxY = gameRect.height - targetRect.height;
+            
+            // Generate random position
+            const randomX = Math.floor(Math.random() * maxX);
+            const randomY = Math.floor(Math.random() * maxY);
+            
+            // Apply new position
+            target.style.left = `${randomX}px`;
+            target.style.top = `${randomY}px`;
+        }
+        
+        function updateDisplay() {
+            scoreElement.textContent = score;
+            timeElement.textContent = timeLeft;
+            clicksElement.textContent = clicks;
+        }
+        
+        function endGame() {
+            clearInterval(timer);
+            gameActive = false;
+            startBtn.disabled = false;
+            
+            showMessage(`Game Over! Final Score: ${score}`, "success");
+        }
+        
+        function showMessage(text, type) {
+            messageElement.textContent = text;
+            messageElement.className = `message ${type}`;
+            messageElement.style.opacity = 1;
+            
+            setTimeout(() => {
+                messageElement.style.opacity = 0;
+            }, 3000);
+        }
+        
+        function checkUpgrades() {
+            // Enable auto-clicker if score is sufficient
+            if (score >= 50 && !autoClickerActive) {
+                autoClickerBtn.disabled = false;
+            }
+            
+            // Enable double points if score is sufficient
+            if (score >= 100 && !doublePointsActive) {
+                doublePointsBtn.disabled = false;
+            }
+        }
+        
+        function purchaseAutoClicker() {
+            if (score < 50 || autoClickerActive) return;
+            
+            score -= 50;
+            autoClickerActive = true;
+            autoClickerBtn.disabled = true;
+            autoClickerBtn.textContent = "ACTIVE";
+            updateDisplay();
+            
+            // Start auto-clicker
+            const autoClicker = setInterval(() => {
+                if (gameActive) {
+                    score += doublePointsActive ? 2 : 1;
+                    clicks++;
+                    updateDisplay();
+                } else {
+                    clearInterval(autoClicker);
+                }
+            }, 3000);
+            
+            showMessage("Auto-Clicker activated! You get points every 3 seconds.", "success");
+        }
+        
+        function purchaseDoublePoints() {
+            if (score < 100 || doublePointsActive) return;
+            
+            score -= 100;
+            doublePointsActive = true;
+            doublePointsBtn.disabled = true;
+            doublePointsBtn.textContent = "ACTIVE";
+            updateDisplay();
+            
+            showMessage("Double Points activated! Each click now gives 2 points.", "success");
+        }
+        
+        // Initialize display
+        updateDisplay();
+    </script>
+</body>
+</html>
