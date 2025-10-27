@@ -1,822 +1,814 @@
-import React, { useEffect, useRef, useState } from "react";
-
-/**
- * MazeChaseGame — improved
- * - Movement fixes (tolerance + grid snapping)
- * - 8 ghosts
- * - Ghosts plant bombs, bombs explode in 3x3 area
- * - 10 levels with increasing difficulty
- *
- * Drop into your React app as a component file and run.
- */
-
-const MazeChaseGame = () => {
-  const canvasRef = useRef(null);
-
-  // UI state
-  const [score, setScore] = useState(0);
-  const [lives, setLives] = useState(3);
-  const [gameStatus, setGameStatus] = useState("playing"); // playing, nextLevel, won, lost
-  const [powerUpActive, setPowerUpActive] = useState(false);
-  const [currentLevel, setCurrentLevel] = useState(1);
-
-  // refs used to avoid stale closures in RAF loop
-  const scoreRef = useRef(score);
-  const livesRef = useRef(lives);
-  const statusRef = useRef(gameStatus);
-  const powerRef = useRef(powerUpActive);
-  const levelRef = useRef(currentLevel);
-
-  useEffect(() => { scoreRef.current = score; }, [score]);
-  useEffect(() => { livesRef.current = lives; }, [lives]);
-  useEffect(() => { statusRef.current = gameStatus; }, [gameStatus]);
-  useEffect(() => { powerRef.current = powerUpActive; }, [powerUpActive]);
-  useEffect(() => { levelRef.current = currentLevel; }, [currentLevel]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-
-    // Canvas size (fixed grid)
-    const CELL_SIZE = 40;
-    const COLS = 20;
-    const ROWS = 14;
-    canvas.width = COLS * CELL_SIZE;
-    canvas.height = ROWS * CELL_SIZE;
-
-    // Radii (collision)
-    const PACMAN_RADIUS = 15;
-    const GHOST_RADIUS = 15;
-    const DOT_RADIUS = 4;
-    const POWERUP_RADIUS = 8;
-    const BOMB_RADIUS = 10; // drawing
-
-    // Movement tolerance — how close to center we snap when turning
-    const TURN_TOLERANCE = 6;
-
-    // Utility: base mazes (2 different seed maps); we'll create variants to make 10 levels
-    const baseMazes = [
-      // base 1 (from your original level1 but trimmed/consistent)
-      [
-        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-        [1,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,1],
-        [1,0,1,1,0,1,1,1,0,1,1,0,1,1,1,0,1,1,0,1],
-        [1,2,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1,1,2,1],
-        [1,0,1,1,0,1,1,0,1,1,1,1,0,1,1,0,1,1,0,1],
-        [1,0,0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,0,1],
-        [1,1,1,1,0,0,0,0,1,3,3,1,0,0,0,0,1,1,1,1],
-        [1,0,0,0,0,1,1,0,1,3,3,1,0,1,1,0,0,0,0,1],
-        [1,0,1,1,0,1,1,0,0,0,0,0,0,1,1,0,1,1,0,1],
-        [1,0,1,1,0,0,0,0,1,1,1,1,0,0,0,0,1,1,0,1],
-        [1,2,0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,2,1],
-        [1,0,1,1,0,1,1,1,0,1,1,0,1,1,1,0,1,1,0,1],
-        [1,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,1],
-        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-      ],
-      // base 2 (from your original level2)
-      [
-        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-        [1,0,1,1,1,1,0,1,1,1,1,1,1,0,1,1,1,1,0,1],
-        [1,2,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,2,1],
-        [1,0,1,1,1,1,0,1,0,1,1,0,1,0,1,1,1,1,0,1],
-        [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
-        [1,1,1,0,1,1,0,1,1,3,3,1,1,0,1,1,0,1,1,1],
-        [1,0,0,0,0,0,0,0,0,3,3,0,0,0,0,0,0,0,0,1],
-        [1,0,1,1,1,1,0,1,1,1,1,1,1,0,1,1,1,1,0,1],
-        [1,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,1],
-        [1,0,1,1,0,1,1,1,0,1,1,0,1,1,1,0,1,1,0,1],
-        [1,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,1],
-        [1,0,1,1,1,1,1,1,1,0,0,1,1,1,1,1,1,1,0,1],
-        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-      ],
-    ];
-
-    // Generate 10 levels by morphing the base mazes deterministically
-    const generateLevelMaze = (levelIndex) => {
-      // choose base by parity
-      const base = JSON.parse(JSON.stringify(baseMazes[levelIndex % baseMazes.length]));
-      // deterministic tweaks: flip some cells based on levelIndex
-      for (let r = 1; r < ROWS - 1; r++) {
-        for (let c = 1; c < COLS - 1; c++) {
-          // turn some 0 into 1 or 1 into 0 based on a seeded function
-          const seed = (r * 31 + c * 17 + levelIndex * 13) % 100;
-          if (seed < Math.min(8, levelIndex)) {
-            // toggle path/wall rarely (but keep borders walls)
-            if (base[r][c] === 0) base[r][c] = 1;
-            else if (base[r][c] === 1) base[r][c] = 0;
-          }
-          // fewer powerups on higher levels
-          if (base[r][c] === 2 && levelIndex > 6) {
-            if ((r + c + levelIndex) % 3 === 0) base[r][c] = 0;
-          }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maze Chase Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-      }
-      return base;
-    };
-
-    // Build all 10 mazes
-    const mazes = [];
-    for (let i = 1; i <= 10; i++) mazes.push(generateLevelMaze(i));
-
-    // Game variables
-    let maze = mazes[levelRef.current - 1];
-
-    // helper: grid->pixel center
-    const cellCenter = (row, col) => ({
-      x: col * CELL_SIZE + CELL_SIZE / 2,
-      y: row * CELL_SIZE + CELL_SIZE / 2,
-    });
-
-    // Initialize items: dots & powerups per level
-    const initCollectibles = (maze) => {
-      const dots = [];
-      const powerUps = [];
-      for (let r = 0; r < maze.length; r++) {
-        for (let c = 0; c < maze[0].length; c++) {
-          if (maze[r][c] === 0) {
-            dots.push({ r, c, ...cellCenter(r, c), collected: false });
-          } else if (maze[r][c] === 2) {
-            powerUps.push({ r, c, ...cellCenter(r, c), collected: false });
-          }
+        
+        body {
+            background-color: #000;
+            color: white;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
         }
-      }
-      return { dots, powerUps };
-    };
-
-    // Setup initial level state
-    let { dots, powerUps } = initCollectibles(maze);
-
-    // Pac-Man state
-    const pacman = {
-      x: 1.5 * CELL_SIZE,
-      y: 1.5 * CELL_SIZE,
-      direction: { x: 0, y: 0 },
-      nextDirection: { x: 0, y: 0 },
-      speed: 2.5,
-      mouthOpen: 0,
-    };
-
-    // Create 8 ghosts — distribute around the center area
-    const ghostStarts = [
-      { r: 6, c: 9 },
-      { r: 6, c: 10 },
-      { r: 7, c: 9 },
-      { r: 7, c: 10 },
-      { r: 5, c: 9 },
-      { r: 5, c: 10 },
-      { r: 8, c: 9 },
-      { r: 8, c: 10 },
-    ];
-
-    const ghostColors = ["#FF0000", "#00FFFF", "#FFA500", "#FFB6C1", "#8A2BE2", "#00FF00", "#FFD700", "#00CED1"];
-
-    const ghosts = ghostStarts.map((s, i) => {
-      const center = cellCenter(s.r, s.c);
-      return {
-        id: i,
-        x: center.x,
-        y: center.y,
-        color: ghostColors[i % ghostColors.length],
-        scared: false,
-        startX: center.x,
-        startY: center.y,
-        speed: 1.2 + (i % 3) * 0.2, // slight variation
-        plantTimer: 200 + i * 60, // countdown to next bomb planting (frames)
-        plantCooldown: 200 + i * 60,
-      };
-    });
-
-    // Bombs: each bomb has r,c, x,y, fuse (frames), ownerId
-    const bombs = [];
-    const explosions = []; // active explosion areas with timer (for drawing)
-
-    // Input
-    const keys = {};
-    const handleKeyDown = (e) => {
-      keys[e.key] = true;
-      if (["ArrowUp", "w"].includes(e.key)) pacman.nextDirection = { x: 0, y: -1 };
-      if (["ArrowDown", "s"].includes(e.key)) pacman.nextDirection = { x: 0, y: 1 };
-      if (["ArrowLeft", "a"].includes(e.key)) pacman.nextDirection = { x: -1, y: 0 };
-      if (["ArrowRight", "d"].includes(e.key)) pacman.nextDirection = { x: 1, y: 0 };
-    };
-    const handleKeyUp = (e) => { keys[e.key] = false; };
-
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-
-    // Collision helpers
-    const getCell = (x, y) => {
-      const c = Math.floor(x / CELL_SIZE);
-      const r = Math.floor(y / CELL_SIZE);
-      return { r, c };
-    };
-
-    const inBounds = (r, c) => r >= 0 && r < ROWS && c >= 0 && c < COLS;
-
-    const isWall = (x, y) => {
-      const { r, c } = getCell(x, y);
-      if (!inBounds(r, c)) return true;
-      return maze[r][c] === 1;
-    };
-
-    // Improved canMove: check multiple points around the intended new position
-    const canMoveTo = (x, y, radius = PACMAN_RADIUS) => {
-      const checkPts = [
-        { x: x - radius + 1, y: y - radius + 1 },
-        { x: x + radius - 1, y: y - radius + 1 },
-        { x: x - radius + 1, y: y + radius - 1 },
-        { x: x + radius - 1, y: y + radius - 1 },
-        // center
-        { x, y },
-      ];
-      return checkPts.every(p => !isWall(p.x, p.y));
-    };
-
-    // Try to change direction with grid-centering when near center of cell
-    const tryChangeDirection = () => {
-      if (pacman.nextDirection.x === 0 && pacman.nextDirection.y === 0) return;
-      const curCell = getCell(pacman.x, pacman.y);
-      const center = cellCenter(curCell.r, curCell.c);
-
-      // If there's space in the desired direction from the current position
-      const newX = pacman.x + pacman.nextDirection.x * pacman.speed;
-      const newY = pacman.y + pacman.nextDirection.y * pacman.speed;
-      if (canMoveTo(newX, newY, PACMAN_RADIUS - 2)) {
-        // If we're reasonably close to cell center (to avoid corner snag), snap to center axis
-        const dx = Math.abs(pacman.x - center.x);
-        const dy = Math.abs(pacman.y - center.y);
-        if ((pacman.nextDirection.x !== 0 && dy < TURN_TOLERANCE) ||
-            (pacman.nextDirection.y !== 0 && dx < TURN_TOLERANCE)) {
-          // snap perpendicular coordinate to center
-          if (pacman.nextDirection.x !== 0) pacman.y = center.y;
-          if (pacman.nextDirection.y !== 0) pacman.x = center.x;
-          pacman.direction = { ...pacman.nextDirection };
-        } else {
-          // allow change if immediate move is possible (open corridor)
-          pacman.direction = { ...pacman.nextDirection };
+        
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
         }
-      }
-    };
-
-    // Find walkable grid cell near a given pixel position (used for bomb placement)
-    const findNearestWalkableCell = (x, y) => {
-      const start = getCell(x, y);
-      if (inBounds(start.r, start.c) && maze[start.r][start.c] !== 1) return start;
-      // search outward small radius
-      const radius = 2;
-      for (let d = 1; d <= radius; d++) {
-        for (let dr = -d; dr <= d; dr++) {
-          for (let dc = -d; dc <= d; dc++) {
-            const r = start.r + dr;
-            const c = start.c + dc;
-            if (inBounds(r, c) && maze[r][c] !== 1) return { r, c };
-          }
+        
+        .stats-container {
+            display: flex;
+            justify-content: space-between;
+            width: 800px;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            margin-bottom: 10px;
         }
-      }
-      return null;
-    };
-
-    // Bomb planting (by ghosts)
-    const plantBombAt = (r, c, ownerId) => {
-      // ensure no existing bomb on that cell
-      if (bombs.some(b => b.r === r && b.c === c)) return;
-      const pos = cellCenter(r, c);
-      bombs.push({
-        r, c,
-        x: pos.x, y: pos.y,
-        fuse: 180, // frames until explosion (~3s at 60fps)
-        ownerId,
-        exploded: false,
-      });
-    };
-
-    // Apply explosion: 3x3 around bomb cell — check Pac-Man and remove bombs after explosion
-    const explodeBomb = (bomb) => {
-      const blastCells = [];
-      for (let dr = -1; dr <= 1; dr++) {
-        for (let dc = -1; dc <= 1; dc++) {
-          const rr = bomb.r + dr;
-          const cc = bomb.c + dc;
-          if (inBounds(rr, cc)) blastCells.push({ r: rr, c: cc, x: cc * CELL_SIZE + CELL_SIZE / 2, y: rr * CELL_SIZE + CELL_SIZE / 2 });
+        
+        canvas {
+            border: 4px solid #2121DE;
+            box-shadow: 0 0 20px rgba(33,33,222,0.5);
         }
-      }
-      explosions.push({ cells: blastCells, timer: 30 }); // draw explosion for ~0.5s
-      // Check if Pac-Man is in any of the blast cells (distance from cell center less than 1 cell halfway)
-      const pacCell = getCell(pacman.x, pacman.y);
-      if (blastCells.some(bc => bc.r === pacCell.r && bc.c === pacCell.c)) {
-        // Pac-Man hit: lose a life and reset to start pos
-        livesRef.current = Math.max(0, livesRef.current - 1);
-        setLives(livesRef.current);
-        if (livesRef.current <= 0) {
-          statusRef.current = "lost";
-          setGameStatus("lost");
-        } else {
-          // reset pacman and ghosts to start positions
-          pacman.x = 1.5 * CELL_SIZE;
-          pacman.y = 1.5 * CELL_SIZE;
-          pacman.direction = { x: 0, y: 0 };
-          ghosts.forEach(g => { g.x = g.startX; g.y = g.startY; });
+        
+        .instructions {
+            text-align: center;
+            font-size: 16px;
+            margin-top: 10px;
         }
-      }
-      // optionally: bombs can also clear dots or powerups — we'll not modify collectibles on explosion to keep game fair
-    };
-
-    // Game loop
-    let rafId = null;
-    let powerUpTimer = 0;
-    let frameCount = 0;
-
-    const gameLoop = () => {
-      if (statusRef.current !== "playing") {
-        // still draw one frame so overlay shows proper state
-        drawFrame();
-        return;
-      }
-      frameCount++;
-
-      // Movement logic
-      tryChangeDirection();
-
-      // Move Pac-Man if possible
-      const nextPacX = pacman.x + pacman.direction.x * pacman.speed;
-      const nextPacY = pacman.y + pacman.direction.y * pacman.speed;
-      if (canMoveTo(nextPacX, nextPacY, PACMAN_RADIUS - 2)) {
-        pacman.x = nextPacX;
-        pacman.y = nextPacY;
-      } else {
-        // stop movement if blocked
-        pacman.direction = { x: 0, y: 0 };
-      }
-
-      // Pac-Man mouth animate
-      pacman.mouthOpen += 0.15;
-
-      // Collect dots
-      dots.forEach(dot => {
-        if (!dot.collected) {
-          const dx = pacman.x - dot.x;
-          const dy = pacman.y - dot.y;
-          if (dx * dx + dy * dy < (PACMAN_RADIUS + DOT_RADIUS) ** 2) {
-            dot.collected = true;
-            scoreRef.current += 10;
-            setScore(scoreRef.current);
-          }
+        
+        .modal {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 50px;
+            border-radius: 20px;
+            text-align: center;
+            border: 5px solid white;
+            z-index: 100;
         }
-      });
-
-      // Collect power-ups
-      powerUps.forEach(pu => {
-        if (!pu.collected) {
-          const dx = pacman.x - pu.x;
-          const dy = pacman.y - pu.y;
-          if (dx * dx + dy * dy < (PACMAN_RADIUS + POWERUP_RADIUS) ** 2) {
-            pu.collected = true;
-            powerRef.current = true;
-            setPowerUpActive(true);
-            powerUpTimer = 600; // frames
-            ghosts.forEach(g => g.scared = true);
-            scoreRef.current += 50;
-            setScore(scoreRef.current);
-          }
+        
+        .modal h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
         }
-      });
-
-      // Power-up timer
-      if (powerUpTimer > 0) {
-        powerUpTimer--;
-        if (powerUpTimer === 0) {
-          powerRef.current = false;
-          setPowerUpActive(false);
-          ghosts.forEach(g => g.scared = false);
+        
+        .modal p {
+            font-size: 32px;
+            margin-bottom: 30px;
         }
-      }
-
-      // Ghosts: simple AI with bomb planting
-      ghosts.forEach(ghost => {
-        // Adjust ghost speed by level difficulty
-        const levelFactor = 1 + (levelRef.current - 1) * 0.06; // increases slightly per level
-        const ghostSpeed = ghost.scared ? -ghost.speed * 0.8 : ghost.speed * levelFactor;
-
-        // chase or flee
-        const toX = pacman.x - ghost.x;
-        const toY = pacman.y - ghost.y;
-        const dist = Math.sqrt(toX * toX + toY * toY) || 1;
-        const dirX = toX / dist;
-        const dirY = toY / dist;
-
-        // try to move along X then Y with collision checks
-        const candidateX = ghost.x + dirX * ghostSpeed;
-        const candidateY = ghost.y + dirY * ghostSpeed;
-
-        if (canMoveTo(candidateX, ghost.y, GHOST_RADIUS - 2)) ghost.x = candidateX;
-        else if (canMoveTo(ghost.x, ghost.y + Math.sign(dirY) * Math.abs(ghostSpeed), GHOST_RADIUS - 2)) ghost.y += Math.sign(dirY) * Math.abs(ghostSpeed);
-        else if (canMoveTo(ghost.x + Math.sign(dirX) * Math.abs(ghostSpeed), ghost.y, GHOST_RADIUS - 2)) ghost.x += Math.sign(dirX) * Math.abs(ghostSpeed);
-        // otherwise small random wiggle to avoid stuck
-        else {
-          const wiggleX = (Math.random() - 0.5) * 2;
-          const wiggleY = (Math.random() - 0.5) * 2;
-          if (canMoveTo(ghost.x + wiggleX, ghost.y + wiggleY, GHOST_RADIUS - 2)) {
-            ghost.x += wiggleX;
-            ghost.y += wiggleY;
-          }
+        
+        .modal button {
+            padding: 20px 50px;
+            font-size: 24px;
+            background-color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: bold;
         }
-
-        // Bomb planting countdown (higher levels plant faster)
-        ghost.plantTimer -= Math.max(1, Math.floor(1 + (levelRef.current - 1) * 0.12));
-        if (ghost.plantTimer <= 0) {
-          const cell = findNearestWalkableCell(ghost.x, ghost.y);
-          if (cell) {
-            // plant bomb with some probability to avoid flooding
-            if (Math.random() < 0.8) {
-              plantBombAt(cell.r, cell.c, ghost.id);
-            }
-          }
-          // reset timer with variation
-          ghost.plantCooldown = Math.max(80, Math.floor(200 - levelRef.current * 10 + Math.random() * 80));
-          ghost.plantTimer = ghost.plantCooldown;
+        
+        .won-modal {
+            background-color: rgba(0,200,0,0.95);
         }
-      });
-
-      // Bomb fuse and explosion handling
-      for (let i = bombs.length - 1; i >= 0; i--) {
-        bombs[i].fuse--;
-        if (bombs[i].fuse <= 0 && !bombs[i].exploded) {
-          bombs[i].exploded = true;
-          explodeBomb(bombs[i]);
-          // remove bomb from array
-          bombs.splice(i, 1);
+        
+        .won-modal button {
+            color: green;
         }
-      }
-
-      // Explosion drawing timer decrement
-      for (let i = explosions.length - 1; i >= 0; i--) {
-        explosions[i].timer--;
-        if (explosions[i].timer <= 0) explosions.splice(i, 1);
-      }
-
-      // Ghost-Pacman collision
-      ghosts.forEach(ghost => {
-        const dx = pacman.x - ghost.x;
-        const dy = pacman.y - ghost.y;
-        if (dx * dx + dy * dy < (PACMAN_RADIUS + GHOST_RADIUS) ** 2) {
-          if (ghost.scared) {
-            // ghost eaten
-            ghost.x = ghost.startX;
-            ghost.y = ghost.startY;
-            scoreRef.current += 200;
-            setScore(scoreRef.current);
-            ghost.scared = false;
-          } else {
-            // Pac-Man loses life and reset positions
-            livesRef.current = Math.max(0, livesRef.current - 1);
-            setLives(livesRef.current);
-            if (livesRef.current <= 0) {
-              statusRef.current = "lost";
-              setGameStatus("lost");
-            } else {
-              pacman.x = 1.5 * CELL_SIZE;
-              pacman.y = 1.5 * CELL_SIZE;
-              pacman.direction = { x: 0, y: 0 };
-              ghosts.forEach(g => { g.x = g.startX; g.y = g.startY; });
-            }
-          }
+        
+        .lost-modal {
+            background-color: rgba(200,0,0,0.95);
         }
-      });
-
-      // Check win: all dots & powerups collected
-      const allDots = dots.every(d => d.collected);
-      const allPUs = powerUps.every(p => p.collected);
-      if (allDots && allPUs) {
-        if (levelRef.current < 10) {
-          // advance
-          levelRef.current += 1;
-          setCurrentLevel(levelRef.current);
-          statusRef.current = "nextLevel";
-          setGameStatus("nextLevel");
-        } else {
-          statusRef.current = "won";
-          setGameStatus("won");
+        
+        .lost-modal button {
+            color: red;
         }
-      }
-
-      drawFrame();
-      rafId = requestAnimationFrame(gameLoop);
-    };
-
-    // Drawing
-    const drawFrame = () => {
-      // clear
-      ctx.fillStyle = "#000000";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // draw maze walls
-      for (let r = 0; r < maze.length; r++) {
-        for (let c = 0; c < maze[0].length; c++) {
-          if (maze[r][c] === 1) {
-            ctx.fillStyle = "#2121DE";
-            ctx.fillRect(c * CELL_SIZE, r * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-            ctx.strokeStyle = "#4040FF";
-            ctx.lineWidth = 2;
-            ctx.strokeRect(c * CELL_SIZE, r * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-          } else if (maze[r][c] === 3) {
-            // empty/ghost area (draw subtle)
-            // leave blank
-          }
+        
+        .next-level-modal {
+            background-color: rgba(0,0,200,0.95);
         }
-      }
-
-      // draw dots
-      dots.forEach(dot => {
-        if (!dot.collected) {
-          ctx.fillStyle = "#FFB897";
-          ctx.beginPath();
-          ctx.arc(dot.x, dot.y, DOT_RADIUS, 0, Math.PI * 2);
-          ctx.fill();
+        
+        .next-level-modal button {
+            color: blue;
         }
-      });
-
-      // draw powerups
-      powerUps.forEach(pu => {
-        if (!pu.collected) {
-          ctx.fillStyle = "#FF1493";
-          ctx.beginPath();
-          ctx.arc(pu.x, pu.y, POWERUP_RADIUS, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.strokeStyle = "#FF69B4";
-          ctx.lineWidth = 2;
-          ctx.stroke();
+        
+        .power-up-indicator {
+            color: #FF1493;
         }
-      });
-
-      // draw bombs
-      bombs.forEach(b => {
-        ctx.fillStyle = "#333333";
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, BOMB_RADIUS, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = "#000000";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        // fuse visual (small shrinking circle)
-        const fuseProgress = Math.max(0, Math.min(1, b.fuse / 180));
-        ctx.fillStyle = "#FF4500";
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, BOMB_RADIUS * (1 - fuseProgress) + 2, 0, Math.PI * 2);
-        ctx.fill();
-      });
-
-      // draw explosions (3x3 cells)
-      explosions.forEach(ex => {
-        ex.cells.forEach(cell => {
-          // draw semi-transparent expanding rectangle
-          ctx.fillStyle = "rgba(255, 80, 0, 0.85)";
-          ctx.fillRect(cell.x - CELL_SIZE / 2, cell.y - CELL_SIZE / 2, CELL_SIZE, CELL_SIZE);
-        });
-      });
-
-      // draw Pac-Man
-      ctx.fillStyle = "#FFFF00";
-      ctx.beginPath();
-      const angle = Math.atan2(pacman.direction.y || 0.0001, pacman.direction.x || 0.0001);
-      const mouthAngle = Math.abs(Math.sin(pacman.mouthOpen)) * 0.5;
-      ctx.arc(pacman.x, pacman.y, PACMAN_RADIUS, angle + mouthAngle, angle + Math.PI * 2 - mouthAngle);
-      ctx.lineTo(pacman.x, pacman.y);
-      ctx.fill();
-
-      // draw ghosts
-      ghosts.forEach(ghost => {
-        // body
-        ctx.fillStyle = ghost.scared ? "#0000FF" : ghost.color;
-        ctx.beginPath();
-        ctx.arc(ghost.x, ghost.y, GHOST_RADIUS, Math.PI, 0);
-        ctx.lineTo(ghost.x + GHOST_RADIUS, ghost.y + GHOST_RADIUS);
-        ctx.lineTo(ghost.x - GHOST_RADIUS, ghost.y + GHOST_RADIUS);
-        ctx.closePath();
-        ctx.fill();
-
-        // eyes
-        ctx.fillStyle = "#FFFFFF";
-        ctx.beginPath();
-        ctx.arc(ghost.x - 5, ghost.y - 3, 4, 0, Math.PI * 2);
-        ctx.arc(ghost.x + 5, ghost.y - 3, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = "#000000";
-        ctx.beginPath();
-        ctx.arc(ghost.x - 5, ghost.y - 3, 2, 0, Math.PI * 2);
-        ctx.arc(ghost.x + 5, ghost.y - 3, 2, 0, Math.PI * 2);
-        ctx.fill();
-      });
-    };
-
-    // Start gameLoop
-    rafId = requestAnimationFrame(gameLoop);
-
-    // When nextLevel becomes active: re-initialize level on click Next Level (handled outside)
-    // Provide cleanup
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-      if (rafId) cancelAnimationFrame(rafId);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [/* run once per mount and when currentLevel changes via full remount below */ currentLevel, gameStatus]);
-
-  // Restart / Level controls: re-mounting component logic to reset canvas loop
-  // To reset internal variables (which are declared inside useEffect), we change a key on canvas to force effect rerun:
-  const [runKey, setRunKey] = useState(0);
-
-  // When level state changes to 'playing' after nextLevel, bump runKey to remount effect with new maze.
-  useEffect(() => {
-    if (gameStatus === "playing") {
-      setRunKey(k => k + 1); // triggers useEffect re-run via key (we used currentLevel in deps earlier)
-    }
-  }, [gameStatus, currentLevel]);
-
-  const handleRestart = () => {
-    setScore(0);
-    setLives(3);
-    setCurrentLevel(1);
-    setGameStatus("playing");
-    setPowerUpActive(false);
-    setRunKey(k => k + 1);
-  };
-
-  const handleNextLevel = () => {
-    // move to playing state — effect will reinitialize because currentLevel changed before and runKey bumped
-    setGameStatus("playing");
-    setPowerUpActive(false);
-    setRunKey(k => k + 1);
-  };
-
-  // UI: hearts display helper
-  const hearts = (n) => "❤️".repeat(Math.max(0, n));
-
-  return (
-    <div style={{
-      width: "100vw",
-      height: "100vh",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      backgroundColor: "#000",
-      margin: 0,
-      padding: 0,
-      overflow: "hidden",
-    }}>
-      <div style={{
-        position: "absolute",
-        top: 20,
-        left: 0,
-        right: 0,
-        display: "flex",
-        justifyContent: "space-around",
-        color: "white",
-        fontFamily: "Arial, sans-serif",
-        fontSize: "24px",
-        fontWeight: "bold",
-        textShadow: "2px 2px 4px rgba(0,0,0,0.8)",
-        zIndex: 10,
-      }}>
-        <div>Score: {score}</div>
-        <div>Lives: {hearts(lives)}</div>
-        <div>Level: {currentLevel} / 10</div>
-        {powerUpActive && <div style={{ color: "#FF1493" }}>⚡ POWER UP! ⚡</div>}
-      </div>
-
-      <canvas
-        key={runKey} // ensures re-init when runKey increments
-        ref={canvasRef}
-        style={{
-          border: "4px solid #2121DE",
-          boxShadow: "0 0 20px rgba(33,33,222,0.5)",
-        }}
-      />
-
-      <div style={{
-        position: "absolute",
-        bottom: 20,
-        color: "white",
-        fontFamily: "Arial, sans-serif",
-        fontSize: "16px",
-        textAlign: "center",
-      }}>
-        <div>Arrow Keys or WASD to move</div>
-        <div>Ghosts plant bombs — avoid the 3×3 blast area!</div>
-      </div>
-
-      {gameStatus === "won" && (
-        <div style={{
-          position: "absolute",
-          top: "50%",
-          left: "50%",
-          transform: "translate(-50%, -50%)",
-          backgroundColor: "rgba(0,200,0,0.95)",
-          padding: "50px",
-          borderRadius: "20px",
-          textAlign: "center",
-          border: "5px solid white",
-        }}>
-          <h1 style={{ color: "white", fontSize: "48px", margin: "0 0 20px 0" }}>🎉 YOU WIN! 🎉</h1>
-          <p style={{ color: "white", fontSize: "32px", margin: "0 0 30px 0" }}>
-            Final Score: {score}
-          </p>
-          <button
-            onClick={handleRestart}
-            style={{
-              padding: "20px 50px",
-              fontSize: "24px",
-              backgroundColor: "white",
-              color: "green",
-              border: "none",
-              borderRadius: "10px",
-              cursor: "pointer",
-              fontWeight: "bold",
-            }}>
-            Play Again
-          </button>
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <div class="stats-container">
+            <div id="score">Score: 0</div>
+            <div id="lives">Lives: ❤️❤️❤️</div>
+            <div id="level">Level: 1 / 10</div>
+            <div id="power-up" class="power-up-indicator" style="display: none;">⚡ POWER UP! ⚡</div>
         </div>
-      )}
-
-      {gameStatus === "lost" && (
-        <div style={{
-          position: "absolute",
-          top: "50%",
-          left: "50%",
-          transform: "translate(-50%, -50%)",
-          backgroundColor: "rgba(200,0,0,0.95)",
-          padding: "50px",
-          borderRadius: "20px",
-          textAlign: "center",
-          border: "5px solid white",
-        }}>
-          <h1 style={{ color: "white", fontSize: "48px", margin: "0 0 20px 0" }}>👻 GAME OVER! 👻</h1>
-          <p style={{ color: "white", fontSize: "32px", margin: "0 0 30px 0" }}>
-            Final Score: {score}
-          </p>
-          <button
-            onClick={handleRestart}
-            style={{
-              padding: "20px 50px",
-              fontSize: "24px",
-              backgroundColor: "white",
-              color: "red",
-              border: "none",
-              borderRadius: "10px",
-              cursor: "pointer",
-              fontWeight: "bold",
-            }}>
-            Try Again
-          </button>
+        
+        <canvas id="game-canvas" width="800" height="560"></canvas>
+        
+        <div class="instructions">
+            <div>Arrow Keys or WASD to move</div>
+            <div>Ghosts plant bombs — avoid the 3×3 blast area!</div>
         </div>
-      )}
-
-      {gameStatus === "nextLevel" && (
-        <div style={{
-          position: "absolute",
-          top: "50%",
-          left: "50%",
-          transform: "translate(-50%, -50%)",
-          backgroundColor: "rgba(0,0,200,0.95)",
-          padding: "50px",
-          borderRadius: "20px",
-          textAlign: "center",
-          border: "5px solid white",
-        }}>
-          <h1 style={{ color: "white", fontSize: "44px", margin: "0 0 20px 0" }}>🎊 LEVEL COMPLETE! 🎊</h1>
-          <p style={{ color: "white", fontSize: "24px", margin: "0 0 30px 0" }}>
-            Score: {score}
-          </p>
-          <button
-            onClick={() => {
-              // advance levelRef happens in gameLoop; here we just set playing and reinit
-              setGameStatus("playing");
-              setPowerUpActive(false);
-              // increment current level if not max
-              setCurrentLevel((lvl) => Math.min(10, lvl + 0));
-              // bump runKey to reinit the canvas effect (effect uses currentLevel)
-              // note: currentLevel was already advanced inside loop on collection; ensure canvas re-init
-            }}
-            style={{
-              padding: "20px 50px",
-              fontSize: "24px",
-              backgroundColor: "white",
-              color: "blue",
-              border: "none",
-              borderRadius: "10px",
-              cursor: "pointer",
-              fontWeight: "bold",
-            }}>
-            Next Level →
-          </button>
-        </div>
-      )}
     </div>
-  );
-};
 
-export default MazeChaseGame;
+    <div id="won-modal" class="modal won-modal" style="display: none;">
+        <h1>🎉 YOU WIN! 🎉</h1>
+        <p id="final-score">Final Score: 0</p>
+        <button id="play-again-won">Play Again</button>
+    </div>
 
-Make this file in HTML format with this same code. 
+    <div id="lost-modal" class="modal lost-modal" style="display: none;">
+        <h1>👻 GAME OVER! 👻</h1>
+        <p id="final-score-lost">Final Score: 0</p>
+        <button id="play-again-lost">Try Again</button>
+    </div>
+
+    <div id="next-level-modal" class="modal next-level-modal" style="display: none;">
+        <h1>🎊 LEVEL COMPLETE! 🎊</h1>
+        <p id="level-score">Score: 0</p>
+        <button id="next-level-button">Next Level →</button>
+    </div>
+
+    <script>
+        // Game constants
+        const CELL_SIZE = 40;
+        const COLS = 20;
+        const ROWS = 14;
+        const PACMAN_RADIUS = 15;
+        const GHOST_RADIUS = 15;
+        const DOT_RADIUS = 4;
+        const POWERUP_RADIUS = 8;
+        const BOMB_RADIUS = 10;
+        const TURN_TOLERANCE = 6;
+
+        // Base mazes
+        const baseMazes = [
+            [
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,1],
+                [1,0,1,1,0,1,1,1,0,1,1,0,1,1,1,0,1,1,0,1],
+                [1,2,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1,1,2,1],
+                [1,0,1,1,0,1,1,0,1,1,1,1,0,1,1,0,1,1,0,1],
+                [1,0,0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,0,1],
+                [1,1,1,1,0,0,0,0,1,3,3,1,0,0,0,0,1,1,1,1],
+                [1,0,0,0,0,1,1,0,1,3,3,1,0,1,1,0,0,0,0,1],
+                [1,0,1,1,0,1,1,0,0,0,0,0,0,1,1,0,1,1,0,1],
+                [1,0,1,1,0,0,0,0,1,1,1,1,0,0,0,0,1,1,0,1],
+                [1,2,0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,2,1],
+                [1,0,1,1,0,1,1,1,0,1,1,0,1,1,1,0,1,1,0,1],
+                [1,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            ],
+            [
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+                [1,0,1,1,1,1,0,1,1,1,1,1,1,0,1,1,1,1,0,1],
+                [1,2,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,2,1],
+                [1,0,1,1,1,1,0,1,0,1,1,0,1,0,1,1,1,1,0,1],
+                [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
+                [1,1,1,0,1,1,0,1,1,3,3,1,1,0,1,1,0,1,1,1],
+                [1,0,0,0,0,0,0,0,0,3,3,0,0,0,0,0,0,0,0,1],
+                [1,0,1,1,1,1,0,1,1,1,1,1,1,0,1,1,1,1,0,1],
+                [1,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,1],
+                [1,0,1,1,0,1,1,1,0,1,1,0,1,1,1,0,1,1,0,1],
+                [1,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,1],
+                [1,0,1,1,1,1,1,1,1,0,0,1,1,1,1,1,1,1,0,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            ],
+        ];
+
+        // Game state
+        let score = 0;
+        let lives = 3;
+        let currentLevel = 1;
+        let gameStatus = "playing"; // playing, nextLevel, won, lost
+        let powerUpActive = false;
+        let powerUpTimer = 0;
+
+        // Game objects
+        let maze = [];
+        let dots = [];
+        let powerUps = [];
+        let pacman = {
+            x: 1.5 * CELL_SIZE,
+            y: 1.5 * CELL_SIZE,
+            direction: { x: 0, y: 0 },
+            nextDirection: { x: 0, y: 0 },
+            speed: 2.5,
+            mouthOpen: 0,
+        };
+        
+        const ghostStarts = [
+            { r: 6, c: 9 },
+            { r: 6, c: 10 },
+            { r: 7, c: 9 },
+            { r: 7, c: 10 },
+            { r: 5, c: 9 },
+            { r: 5, c: 10 },
+            { r: 8, c: 9 },
+            { r: 8, c: 10 },
+        ];
+
+        const ghostColors = ["#FF0000", "#00FFFF", "#FFA500", "#FFB6C1", "#8A2BE2", "#00FF00", "#FFD700", "#00CED1"];
+        
+        let ghosts = [];
+        let bombs = [];
+        let explosions = [];
+        let frameCount = 0;
+        let keys = {};
+
+        // Utility functions
+        const cellCenter = (row, col) => ({
+            x: col * CELL_SIZE + CELL_SIZE / 2,
+            y: row * CELL_SIZE + CELL_SIZE / 2,
+        });
+
+        const generateLevelMaze = (levelIndex) => {
+            const base = JSON.parse(JSON.stringify(baseMazes[levelIndex % baseMazes.length]));
+            for (let r = 1; r < ROWS - 1; r++) {
+                for (let c = 1; c < COLS - 1; c++) {
+                    const seed = (r * 31 + c * 17 + levelIndex * 13) % 100;
+                    if (seed < Math.min(8, levelIndex)) {
+                        if (base[r][c] === 0) base[r][c] = 1;
+                        else if (base[r][c] === 1) base[r][c] = 0;
+                    }
+                    if (base[r][c] === 2 && levelIndex > 6) {
+                        if ((r + c + levelIndex) % 3 === 0) base[r][c] = 0;
+                    }
+                }
+            }
+            return base;
+        };
+
+        const initCollectibles = (maze) => {
+            const dots = [];
+            const powerUps = [];
+            for (let r = 0; r < maze.length; r++) {
+                for (let c = 0; c < maze[0].length; c++) {
+                    if (maze[r][c] === 0) {
+                        dots.push({ r, c, ...cellCenter(r, c), collected: false });
+                    } else if (maze[r][c] === 2) {
+                        powerUps.push({ r, c, ...cellCenter(r, c), collected: false });
+                    }
+                }
+            }
+            return { dots, powerUps };
+        };
+
+        const getCell = (x, y) => {
+            const c = Math.floor(x / CELL_SIZE);
+            const r = Math.floor(y / CELL_SIZE);
+            return { r, c };
+        };
+
+        const inBounds = (r, c) => r >= 0 && r < ROWS && c >= 0 && c < COLS;
+
+        const isWall = (x, y) => {
+            const { r, c } = getCell(x, y);
+            if (!inBounds(r, c)) return true;
+            return maze[r][c] === 1;
+        };
+
+        const canMoveTo = (x, y, radius = PACMAN_RADIUS) => {
+            const checkPts = [
+                { x: x - radius + 1, y: y - radius + 1 },
+                { x: x + radius - 1, y: y - radius + 1 },
+                { x: x - radius + 1, y: y + radius - 1 },
+                { x: x + radius - 1, y: y + radius - 1 },
+                { x, y },
+            ];
+            return checkPts.every(p => !isWall(p.x, p.y));
+        };
+
+        const tryChangeDirection = () => {
+            if (pacman.nextDirection.x === 0 && pacman.nextDirection.y === 0) return;
+            const curCell = getCell(pacman.x, pacman.y);
+            const center = cellCenter(curCell.r, curCell.c);
+
+            const newX = pacman.x + pacman.nextDirection.x * pacman.speed;
+            const newY = pacman.y + pacman.nextDirection.y * pacman.speed;
+            if (canMoveTo(newX, newY, PACMAN_RADIUS - 2)) {
+                const dx = Math.abs(pacman.x - center.x);
+                const dy = Math.abs(pacman.y - center.y);
+                if ((pacman.nextDirection.x !== 0 && dy < TURN_TOLERANCE) ||
+                    (pacman.nextDirection.y !== 0 && dx < TURN_TOLERANCE)) {
+                    if (pacman.nextDirection.x !== 0) pacman.y = center.y;
+                    if (pacman.nextDirection.y !== 0) pacman.x = center.x;
+                    pacman.direction = { ...pacman.nextDirection };
+                } else {
+                    pacman.direction = { ...pacman.nextDirection };
+                }
+            }
+        };
+
+        const findNearestWalkableCell = (x, y) => {
+            const start = getCell(x, y);
+            if (inBounds(start.r, start.c) && maze[start.r][start.c] !== 1) return start;
+            const radius = 2;
+            for (let d = 1; d <= radius; d++) {
+                for (let dr = -d; dr <= d; dr++) {
+                    for (let dc = -d; dc <= d; dc++) {
+                        const r = start.r + dr;
+                        const c = start.c + dc;
+                        if (inBounds(r, c) && maze[r][c] !== 1) return { r, c };
+                    }
+                }
+            }
+            return null;
+        };
+
+        const plantBombAt = (r, c, ownerId) => {
+            if (bombs.some(b => b.r === r && b.c === c)) return;
+            const pos = cellCenter(r, c);
+            bombs.push({
+                r, c,
+                x: pos.x, y: pos.y,
+                fuse: 180,
+                ownerId,
+                exploded: false,
+            });
+        };
+
+        const explodeBomb = (bomb) => {
+            const blastCells = [];
+            for (let dr = -1; dr <= 1; dr++) {
+                for (let dc = -1; dc <= 1; dc++) {
+                    const rr = bomb.r + dr;
+                    const cc = bomb.c + dc;
+                    if (inBounds(rr, cc)) blastCells.push({ r: rr, c: cc, x: cc * CELL_SIZE + CELL_SIZE / 2, y: rr * CELL_SIZE + CELL_SIZE / 2 });
+                }
+            }
+            explosions.push({ cells: blastCells, timer: 30 });
+            
+            const pacCell = getCell(pacman.x, pacman.y);
+            if (blastCells.some(bc => bc.r === pacCell.r && bc.c === pacCell.c)) {
+                lives = Math.max(0, lives - 1);
+                updateUI();
+                if (lives <= 0) {
+                    gameStatus = "lost";
+                    showModal('lost');
+                } else {
+                    pacman.x = 1.5 * CELL_SIZE;
+                    pacman.y = 1.5 * CELL_SIZE;
+                    pacman.direction = { x: 0, y: 0 };
+                    ghosts.forEach(g => { g.x = g.startX; g.y = g.startY; });
+                }
+            }
+        };
+
+        // UI functions
+        const updateUI = () => {
+            document.getElementById('score').textContent = `Score: ${score}`;
+            document.getElementById('lives').textContent = `Lives: ${'❤️'.repeat(Math.max(0, lives))}`;
+            document.getElementById('level').textContent = `Level: ${currentLevel} / 10`;
+            
+            const powerUpElement = document.getElementById('power-up');
+            if (powerUpActive) {
+                powerUpElement.style.display = 'block';
+            } else {
+                powerUpElement.style.display = 'none';
+            }
+        };
+
+        const showModal = (type) => {
+            // Hide all modals first
+            document.getElementById('won-modal').style.display = 'none';
+            document.getElementById('lost-modal').style.display = 'none';
+            document.getElementById('next-level-modal').style.display = 'none';
+            
+            if (type === 'won') {
+                document.getElementById('final-score').textContent = `Final Score: ${score}`;
+                document.getElementById('won-modal').style.display = 'block';
+            } else if (type === 'lost') {
+                document.getElementById('final-score-lost').textContent = `Final Score: ${score}`;
+                document.getElementById('lost-modal').style.display = 'block';
+            } else if (type === 'nextLevel') {
+                document.getElementById('level-score').textContent = `Score: ${score}`;
+                document.getElementById('next-level-modal').style.display = 'block';
+            }
+        };
+
+        const hideAllModals = () => {
+            document.getElementById('won-modal').style.display = 'none';
+            document.getElementById('lost-modal').style.display = 'none';
+            document.getElementById('next-level-modal').style.display = 'none';
+        };
+
+        // Drawing functions
+        const drawFrame = () => {
+            const canvas = document.getElementById('game-canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Clear canvas
+            ctx.fillStyle = "#000000";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw maze walls
+            for (let r = 0; r < maze.length; r++) {
+                for (let c = 0; c < maze[0].length; c++) {
+                    if (maze[r][c] === 1) {
+                        ctx.fillStyle = "#2121DE";
+                        ctx.fillRect(c * CELL_SIZE, r * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                        ctx.strokeStyle = "#4040FF";
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(c * CELL_SIZE, r * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                    }
+                }
+            }
+
+            // Draw dots
+            dots.forEach(dot => {
+                if (!dot.collected) {
+                    ctx.fillStyle = "#FFB897";
+                    ctx.beginPath();
+                    ctx.arc(dot.x, dot.y, DOT_RADIUS, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            });
+
+            // Draw powerups
+            powerUps.forEach(pu => {
+                if (!pu.collected) {
+                    ctx.fillStyle = "#FF1493";
+                    ctx.beginPath();
+                    ctx.arc(pu.x, pu.y, POWERUP_RADIUS, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = "#FF69B4";
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            });
+
+            // Draw bombs
+            bombs.forEach(b => {
+                ctx.fillStyle = "#333333";
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, BOMB_RADIUS, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = "#000000";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                const fuseProgress = Math.max(0, Math.min(1, b.fuse / 180));
+                ctx.fillStyle = "#FF4500";
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, BOMB_RADIUS * (1 - fuseProgress) + 2, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Draw explosions
+            explosions.forEach(ex => {
+                ex.cells.forEach(cell => {
+                    ctx.fillStyle = "rgba(255, 80, 0, 0.85)";
+                    ctx.fillRect(cell.x - CELL_SIZE / 2, cell.y - CELL_SIZE / 2, CELL_SIZE, CELL_SIZE);
+                });
+            });
+
+            // Draw Pac-Man
+            ctx.fillStyle = "#FFFF00";
+            ctx.beginPath();
+            const angle = Math.atan2(pacman.direction.y || 0.0001, pacman.direction.x || 0.0001);
+            const mouthAngle = Math.abs(Math.sin(pacman.mouthOpen)) * 0.5;
+            ctx.arc(pacman.x, pacman.y, PACMAN_RADIUS, angle + mouthAngle, angle + Math.PI * 2 - mouthAngle);
+            ctx.lineTo(pacman.x, pacman.y);
+            ctx.fill();
+
+            // Draw ghosts
+            ghosts.forEach(ghost => {
+                ctx.fillStyle = ghost.scared ? "#0000FF" : ghost.color;
+                ctx.beginPath();
+                ctx.arc(ghost.x, ghost.y, GHOST_RADIUS, Math.PI, 0);
+                ctx.lineTo(ghost.x + GHOST_RADIUS, ghost.y + GHOST_RADIUS);
+                ctx.lineTo(ghost.x - GHOST_RADIUS, ghost.y + GHOST_RADIUS);
+                ctx.closePath();
+                ctx.fill();
+
+                // Eyes
+                ctx.fillStyle = "#FFFFFF";
+                ctx.beginPath();
+                ctx.arc(ghost.x - 5, ghost.y - 3, 4, 0, Math.PI * 2);
+                ctx.arc(ghost.x + 5, ghost.y - 3, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = "#000000";
+                ctx.beginPath();
+                ctx.arc(ghost.x - 5, ghost.y - 3, 2, 0, Math.PI * 2);
+                ctx.arc(ghost.x + 5, ghost.y - 3, 2, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        };
+
+        // Game loop
+        const gameLoop = () => {
+            if (gameStatus !== "playing") {
+                drawFrame();
+                return;
+            }
+            frameCount++;
+
+            // Movement logic
+            tryChangeDirection();
+
+            // Move Pac-Man
+            const nextPacX = pacman.x + pacman.direction.x * pacman.speed;
+            const nextPacY = pacman.y + pacman.direction.y * pacman.speed;
+            if (canMoveTo(nextPacX, nextPacY, PACMAN_RADIUS - 2)) {
+                pacman.x = nextPacX;
+                pacman.y = nextPacY;
+            } else {
+                pacman.direction = { x: 0, y: 0 };
+            }
+
+            // Pac-Man mouth animation
+            pacman.mouthOpen += 0.15;
+
+            // Collect dots
+            dots.forEach(dot => {
+                if (!dot.collected) {
+                    const dx = pacman.x - dot.x;
+                    const dy = pacman.y - dot.y;
+                    if (dx * dx + dy * dy < (PACMAN_RADIUS + DOT_RADIUS) ** 2) {
+                        dot.collected = true;
+                        score += 10;
+                        updateUI();
+                    }
+                }
+            });
+
+            // Collect power-ups
+            powerUps.forEach(pu => {
+                if (!pu.collected) {
+                    const dx = pacman.x - pu.x;
+                    const dy = pacman.y - pu.y;
+                    if (dx * dx + dy * dy < (PACMAN_RADIUS + POWERUP_RADIUS) ** 2) {
+                        pu.collected = true;
+                        powerUpActive = true;
+                        powerUpTimer = 600;
+                        ghosts.forEach(g => g.scared = true);
+                        score += 50;
+                        updateUI();
+                    }
+                }
+            });
+
+            // Power-up timer
+            if (powerUpTimer > 0) {
+                powerUpTimer--;
+                if (powerUpTimer === 0) {
+                    powerUpActive = false;
+                    ghosts.forEach(g => g.scared = false);
+                    updateUI();
+                }
+            }
+
+            // Ghosts AI
+            ghosts.forEach(ghost => {
+                const levelFactor = 1 + (currentLevel - 1) * 0.06;
+                const ghostSpeed = ghost.scared ? -ghost.speed * 0.8 : ghost.speed * levelFactor;
+
+                const toX = pacman.x - ghost.x;
+                const toY = pacman.y - ghost.y;
+                const dist = Math.sqrt(toX * toX + toY * toY) || 1;
+                const dirX = toX / dist;
+                const dirY = toY / dist;
+
+                const candidateX = ghost.x + dirX * ghostSpeed;
+                const candidateY = ghost.y + dirY * ghostSpeed;
+
+                if (canMoveTo(candidateX, ghost.y, GHOST_RADIUS - 2)) ghost.x = candidateX;
+                else if (canMoveTo(ghost.x, ghost.y + Math.sign(dirY) * Math.abs(ghostSpeed), GHOST_RADIUS - 2)) ghost.y += Math.sign(dirY) * Math.abs(ghostSpeed);
+                else if (canMoveTo(ghost.x + Math.sign(dirX) * Math.abs(ghostSpeed), ghost.y, GHOST_RADIUS - 2)) ghost.x += Math.sign(dirX) * Math.abs(ghostSpeed);
+                else {
+                    const wiggleX = (Math.random() - 0.5) * 2;
+                    const wiggleY = (Math.random() - 0.5) * 2;
+                    if (canMoveTo(ghost.x + wiggleX, ghost.y + wiggleY, GHOST_RADIUS - 2)) {
+                        ghost.x += wiggleX;
+                        ghost.y += wiggleY;
+                    }
+                }
+
+                // Bomb planting
+                ghost.plantTimer -= Math.max(1, Math.floor(1 + (currentLevel - 1) * 0.12));
+                if (ghost.plantTimer <= 0) {
+                    const cell = findNearestWalkableCell(ghost.x, ghost.y);
+                    if (cell && Math.random() < 0.8) {
+                        plantBombAt(cell.r, cell.c, ghost.id);
+                    }
+                    ghost.plantCooldown = Math.max(80, Math.floor(200 - currentLevel * 10 + Math.random() * 80));
+                    ghost.plantTimer = ghost.plantCooldown;
+                }
+            });
+
+            // Bomb handling
+            for (let i = bombs.length - 1; i >= 0; i--) {
+                bombs[i].fuse--;
+                if (bombs[i].fuse <= 0 && !bombs[i].exploded) {
+                    bombs[i].exploded = true;
+                    explodeBomb(bombs[i]);
+                    bombs.splice(i, 1);
+                }
+            }
+
+            // Explosion handling
+            for (let i = explosions.length - 1; i >= 0; i--) {
+                explosions[i].timer--;
+                if (explosions[i].timer <= 0) explosions.splice(i, 1);
+            }
+
+            // Ghost-Pacman collision
+            ghosts.forEach(ghost => {
+                const dx = pacman.x - ghost.x;
+                const dy = pacman.y - ghost.y;
+                if (dx * dx + dy * dy < (PACMAN_RADIUS + GHOST_RADIUS) ** 2) {
+                    if (ghost.scared) {
+                        ghost.x = ghost.startX;
+                        ghost.y = ghost.startY;
+                        score += 200;
+                        updateUI();
+                        ghost.scared = false;
+                    } else {
+                        lives = Math.max(0, lives - 1);
+                        updateUI();
+                        if (lives <= 0) {
+                            gameStatus = "lost";
+                            showModal('lost');
+                        } else {
+                            pacman.x = 1.5 * CELL_SIZE;
+                            pacman.y = 1.5 * CELL_SIZE;
+                            pacman.direction = { x: 0, y: 0 };
+                            ghosts.forEach(g => { g.x = g.startX; g.y = g.startY; });
+                        }
+                    }
+                }
+            });
+
+            // Check win condition
+            const allDots = dots.every(d => d.collected);
+            const allPUs = powerUps.every(p => p.collected);
+            if (allDots && allPUs) {
+                if (currentLevel < 10) {
+                    gameStatus = "nextLevel";
+                    showModal('nextLevel');
+                } else {
+                    gameStatus = "won";
+                    showModal('won');
+                }
+            }
+
+            drawFrame();
+            requestAnimationFrame(gameLoop);
+        };
+
+        // Initialize game
+        const initGame = () => {
+            // Hide all modals first
+            hideAllModals();
+            
+            // Reset game state
+            score = 0;
+            lives = 3;
+            currentLevel = 1;
+            gameStatus = "playing";
+            powerUpActive = false;
+            powerUpTimer = 0;
+            
+            // Generate maze
+            maze = generateLevelMaze(currentLevel);
+            
+            // Initialize collectibles
+            const collectibles = initCollectibles(maze);
+            dots = collectibles.dots;
+            powerUps = collectibles.powerUps;
+            
+            // Reset Pac-Man
+            pacman = {
+                x: 1.5 * CELL_SIZE,
+                y: 1.5 * CELL_SIZE,
+                direction: { x: 0, y: 0 },
+                nextDirection: { x: 0, y: 0 },
+                speed: 2.5,
+                mouthOpen: 0,
+            };
+            
+            // Reset ghosts
+            ghosts = ghostStarts.map((s, i) => {
+                const center = cellCenter(s.r, s.c);
+                return {
+                    id: i,
+                    x: center.x,
+                    y: center.y,
+                    color: ghostColors[i % ghostColors.length],
+                    scared: false,
+                    startX: center.x,
+                    startY: center.y,
+                    speed: 1.2 + (i % 3) * 0.2,
+                    plantTimer: 200 + i * 60,
+                    plantCooldown: 200 + i * 60,
+                };
+            });
+            
+            // Clear bombs and explosions
+            bombs = [];
+            explosions = [];
+            frameCount = 0;
+            
+            // Update UI
+            updateUI();
+            
+            // Start game loop
+            gameLoop();
+        };
+
+        const nextLevel = () => {
+            // Hide all modals first
+            hideAllModals();
+            
+            currentLevel++;
+            gameStatus = "playing";
+            powerUpActive = false;
+            
+            // Generate new maze
+            maze = generateLevelMaze(currentLevel);
+            
+            // Initialize collectibles
+            const collectibles = initCollectibles(maze);
+            dots = collectibles.dots;
+            powerUps = collectibles.powerUps;
+            
+            // Reset Pac-Man
+            pacman = {
+                x: 1.5 * CELL_SIZE,
+                y: 1.5 * CELL_SIZE,
+                direction: { x: 0, y: 0 },
+                nextDirection: { x: 0, y: 0 },
+                speed: 2.5,
+                mouthOpen: 0,
+            };
+            
+            // Reset ghosts
+            ghosts = ghostStarts.map((s, i) => {
+                const center = cellCenter(s.r, s.c);
+                return {
+                    id: i,
+                    x: center.x,
+                    y: center.y,
+                    color: ghostColors[i % ghostColors.length],
+                    scared: false,
+                    startX: center.x,
+                    startY: center.y,
+                    speed: 1.2 + (i % 3) * 0.2,
+                    plantTimer: 200 + i * 60,
+                    plantCooldown: 200 + i * 60,
+                };
+            });
+            
+            // Clear bombs and explosions
+            bombs = [];
+            explosions = [];
+            
+            // Update UI
+            updateUI();
+            
+            // Start game loop
+            gameLoop();
+        };
+
+        // Event listeners
+        document.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if (["ArrowUp", "w"].includes(e.key)) pacman.nextDirection = { x: 0, y: -1 };
+            if (["ArrowDown", "s"].includes(e.key)) pacman.nextDirection = { x: 0, y: 1 };
+            if (["ArrowLeft", "a"].includes(e.key)) pacman.nextDirection = { x: -1, y: 0 };
+            if (["ArrowRight", "d"].includes(e.key)) pacman.nextDirection = { x: 1, y: 0 };
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+
+        document.getElementById('play-again-won').addEventListener('click', initGame);
+        document.getElementById('play-again-lost').addEventListener('click', initGame);
+        document.getElementById('next-level-button').addEventListener('click', nextLevel);
+
+        // Start the game
+        initGame();
+    </script>
+</body>
+</html>
