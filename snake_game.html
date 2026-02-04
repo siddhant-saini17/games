@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Classic Snake</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f6f3ee;
+            --panel: #ffffff;
+            --ink: #1f1b16;
+            --accent: #3a7d44;
+            --accent-dark: #26552f;
+            --muted: #7a6f66;
+            --grid: #e5dfd6;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Georgia", "Times New Roman", serif;
+            background: radial-gradient(circle at top, #fff6e8 0%, var(--bg) 45%, #efe7dd 100%);
+            color: var(--ink);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .app {
+            width: min(520px, 100%);
+            background: var(--panel);
+            border: 2px solid #e7ded2;
+            border-radius: 18px;
+            padding: 20px;
+            display: grid;
+            gap: 16px;
+            box-shadow: 0 18px 40px rgba(31, 27, 22, 0.12);
+        }
+
+        .hud {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .title {
+            font-size: 1.2rem;
+            font-weight: 700;
+        }
+
+        .stats {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            font-size: 0.95rem;
+            color: var(--muted);
+        }
+
+        .stat {
+            min-width: max-content;
+        }
+
+        .board {
+            position: relative;
+            display: grid;
+            place-items: center;
+        }
+
+        canvas {
+            width: 100%;
+            height: auto;
+            border-radius: 12px;
+            border: 2px solid var(--grid);
+            background: #fffaf3;
+        }
+
+        .overlay {
+            position: absolute;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            font-size: 1.1rem;
+            color: var(--accent-dark);
+            text-align: center;
+            pointer-events: none;
+        }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            appearance: none;
+            border: 2px solid var(--accent);
+            background: var(--accent);
+            color: #fff;
+            padding: 8px 14px;
+            border-radius: 999px;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
+        }
+
+        button:active {
+            transform: translateY(1px);
+        }
+
+        button:focus-visible {
+            outline: 3px solid rgba(58, 125, 68, 0.3);
+            outline-offset: 2px;
+        }
+
+        button#pause {
+            border-color: #d6a84b;
+            background: #d6a84b;
+        }
+
+        .tilt {
+            border-color: #6c7aa0;
+            background: #6c7aa0;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .hint {
+            margin: 0;
+            font-size: 0.9rem;
+            color: var(--muted);
+        }
+    </style>
+</head>
+<body>
+    <main class="app">
+        <header class="hud">
+            <div class="title">Classic Snake</div>
+            <div class="stats">
+                <div class="stat" aria-live="polite">Score: <span id="score">0</span></div>
+                <div class="stat" aria-live="polite">High: <span id="high-score">0</span></div>
+                <div class="stat" aria-live="polite">Status: <span id="status">Running</span></div>
+            </div>
+        </header>
+
+        <section class="board">
+            <canvas id="game" width="400" height="400" role="img" aria-label="Snake game board"></canvas>
+            <div class="overlay" id="overlay" aria-live="polite"></div>
+        </section>
+
+        <section class="controls">
+            <button id="restart" type="button">Restart</button>
+            <button id="pause" type="button">Pause</button>
+            <button id="tilt" type="button" class="tilt hidden">Enable Tilt</button>
+        </section>
+
+        <p class="hint" id="hint">Keyboard: Arrow keys or WASD. Mobile: enable tilt.</p>
+    </main>
+
+    <script>
+        const canvas = document.getElementById("game");
+        const scoreEl = document.getElementById("score");
+        const highScoreEl = document.getElementById("high-score");
+        const statusEl = document.getElementById("status");
+        const overlayEl = document.getElementById("overlay");
+        const restartBtn = document.getElementById("restart");
+        const pauseBtn = document.getElementById("pause");
+        const tiltBtn = document.getElementById("tilt");
+        const hintEl = document.getElementById("hint");
+        const boardEl = document.querySelector(".board");
+
+        const ctx = canvas.getContext("2d");
+
+        const GRID_SIZE = 20;
+        const TICK_MS = 140;
+        const TILT_THRESHOLD = 15;
+        const TILT_COOLDOWN_MS = 140;
+
+        const DIRS = {
+            up: { x: 0, y: -1 },
+            down: { x: 0, y: 1 },
+            left: { x: -1, y: 0 },
+            right: { x: 1, y: 0 },
+        };
+
+        const OPPOSITES = {
+            up: "down",
+            down: "up",
+            left: "right",
+            right: "left",
+        };
+
+        function makeRng(seed = Math.random()) {
+            let state = Math.floor(seed * 2 ** 31) || 1;
+            return () => {
+                state = (1103515245 * state + 12345) % 2 ** 31;
+                return state / 2 ** 31;
+            };
+        }
+
+        function initState({ rows, cols, rng }) {
+            const mid = Math.floor(rows / 2);
+            const snake = [
+                { x: mid - 1, y: mid },
+                { x: mid - 2, y: mid },
+            ];
+
+            return {
+                rows,
+                cols,
+                snake,
+                direction: "right",
+                pendingDir: "right",
+                food: spawnFood(snake, rows, cols, rng),
+                score: 0,
+                status: "running",
+            };
+        }
+
+        function spawnFood(snake, rows, cols, rng) {
+            const occupied = new Set(snake.map((p) => `${p.x},${p.y}`));
+            const free = [];
+            for (let y = 0; y < rows; y += 1) {
+                for (let x = 0; x < cols; x += 1) {
+                    const key = `${x},${y}`;
+                    if (!occupied.has(key)) {
+                        free.push({ x, y });
+                    }
+                }
+            }
+            if (free.length === 0) {
+                return null;
+            }
+            const idx = Math.floor(rng() * free.length);
+            return free[idx];
+        }
+
+        function stepState(state, rng) {
+            if (state.status !== "running") return state;
+
+            const direction = state.pendingDir;
+            const delta = DIRS[direction];
+            const head = state.snake[0];
+            const next = { x: head.x + delta.x, y: head.y + delta.y };
+
+            const outOfBounds =
+                next.x < 0 || next.x >= state.cols || next.y < 0 || next.y >= state.rows;
+            const hitsSelf = state.snake.some((seg) => seg.x === next.x && seg.y === next.y);
+
+            if (outOfBounds || hitsSelf) {
+                return { ...state, status: "over" };
+            }
+
+            const ateFood = state.food && next.x === state.food.x && next.y === state.food.y;
+            const nextSnake = [next, ...state.snake];
+
+            if (!ateFood) {
+                nextSnake.pop();
+            }
+
+            const nextFood = ateFood ? spawnFood(nextSnake, state.rows, state.cols, rng) : state.food;
+            const nextScore = ateFood ? state.score + 1 : state.score;
+            const nextStatus = nextFood ? "running" : "won";
+
+            return {
+                ...state,
+                snake: nextSnake,
+                direction,
+                pendingDir: direction,
+                food: nextFood,
+                score: nextScore,
+                status: nextStatus,
+            };
+        }
+
+        function queueDirection(state, nextDir) {
+            if (!DIRS[nextDir]) return state;
+            if (state.snake.length > 1 && OPPOSITES[nextDir] === state.direction) return state;
+            return { ...state, pendingDir: nextDir };
+        }
+
+        function draw(state) {
+            const cell = canvas.width / GRID_SIZE;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = "#f7f1e6";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.strokeStyle = "#e5dfd6";
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= GRID_SIZE; i += 1) {
+                const pos = i * cell;
+                ctx.beginPath();
+                ctx.moveTo(pos, 0);
+                ctx.lineTo(pos, canvas.height);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(0, pos);
+                ctx.lineTo(canvas.width, pos);
+                ctx.stroke();
+            }
+
+            if (state.food) {
+                ctx.fillStyle = "#d04c3f";
+                ctx.fillRect(
+                    state.food.x * cell + 3,
+                    state.food.y * cell + 3,
+                    cell - 6,
+                    cell - 6
+                );
+            }
+
+            state.snake.forEach((seg, index) => {
+                ctx.fillStyle = index === 0 ? "#3a7d44" : "#5c9a62";
+                ctx.fillRect(
+                    seg.x * cell + 2,
+                    seg.y * cell + 2,
+                    cell - 4,
+                    cell - 4
+                );
+            });
+        }
+
+        const rng = makeRng();
+        let state = initState({ rows: GRID_SIZE, cols: GRID_SIZE, rng });
+        let paused = false;
+        let highScore = Number(localStorage.getItem("snake_high_score") || 0);
+        let tiltEnabled = false;
+        let lastTiltAt = 0;
+
+        function resizeCanvas() {
+            const maxSize = 420;
+            const available = boardEl.clientWidth || maxSize;
+            const size = Math.floor(Math.min(maxSize, available));
+            const snapped = Math.max(GRID_SIZE * 8, Math.floor(size / GRID_SIZE) * GRID_SIZE);
+            canvas.width = snapped;
+            canvas.height = snapped;
+        }
+
+        function updateOverlay() {
+            if (state.status === "over") {
+                overlayEl.textContent = "Game over — press Restart";
+                return;
+            }
+            if (state.status === "won") {
+                overlayEl.textContent = "You win — press Restart";
+                return;
+            }
+            if (paused) {
+                overlayEl.textContent = "Paused";
+                return;
+            }
+            overlayEl.textContent = "";
+        }
+
+        function syncUI() {
+            scoreEl.textContent = String(state.score);
+            if (state.score > highScore) {
+                highScore = state.score;
+                localStorage.setItem("snake_high_score", String(highScore));
+            }
+            highScoreEl.textContent = String(highScore);
+            statusEl.textContent =
+                state.status === "over"
+                    ? "Game over"
+                    : state.status === "won"
+                    ? "You win"
+                    : paused
+                    ? "Paused"
+                    : "Running";
+            pauseBtn.textContent = paused ? "Resume" : "Pause";
+            updateOverlay();
+        }
+
+        function tick() {
+            if (paused || state.status !== "running") {
+                draw(state);
+                return;
+            }
+            state = stepState(state, rng);
+            syncUI();
+            draw(state);
+        }
+
+        const interval = setInterval(tick, TICK_MS);
+
+        function restart() {
+            state = initState({ rows: GRID_SIZE, cols: GRID_SIZE, rng });
+            paused = false;
+            syncUI();
+            draw(state);
+        }
+
+        function togglePause() {
+            if (state.status !== "running") return;
+            paused = !paused;
+            syncUI();
+        }
+
+        window.addEventListener("keydown", (event) => {
+            const key = event.key.toLowerCase();
+            let nextDir = null;
+            if (key === "arrowup" || key === "w") nextDir = "up";
+            if (key === "arrowdown" || key === "s") nextDir = "down";
+            if (key === "arrowleft" || key === "a") nextDir = "left";
+            if (key === "arrowright" || key === "d") nextDir = "right";
+            if (key === " " || key === "p") {
+                event.preventDefault();
+                togglePause();
+                return;
+            }
+            if (!nextDir) return;
+            event.preventDefault();
+            state = queueDirection(state, nextDir);
+        });
+
+        restartBtn.addEventListener("click", restart);
+
+        pauseBtn.addEventListener("click", togglePause);
+
+        function handleTilt(event) {
+            if (!tiltEnabled || paused || state.status !== "running") return;
+            const now = Date.now();
+            if (now - lastTiltAt < TILT_COOLDOWN_MS) return;
+
+            const beta = event.beta ?? 0;
+            const gamma = event.gamma ?? 0;
+
+            let nextDir = null;
+            if (Math.abs(gamma) > Math.abs(beta)) {
+                if (gamma > TILT_THRESHOLD) nextDir = "right";
+                if (gamma < -TILT_THRESHOLD) nextDir = "left";
+            } else {
+                if (beta > TILT_THRESHOLD) nextDir = "down";
+                if (beta < -TILT_THRESHOLD) nextDir = "up";
+            }
+
+            if (nextDir) {
+                lastTiltAt = now;
+                state = queueDirection(state, nextDir);
+            }
+        }
+
+        async function enableTilt() {
+            if (!("DeviceOrientationEvent" in window)) return;
+            if (typeof DeviceOrientationEvent.requestPermission === "function") {
+                const permission = await DeviceOrientationEvent.requestPermission();
+                if (permission !== "granted") return;
+            }
+            tiltEnabled = true;
+            tiltBtn.textContent = "Tilt On";
+            hintEl.textContent = "Keyboard: Arrow keys or WASD. Mobile: tilt to move.";
+            window.addEventListener("deviceorientation", handleTilt);
+        }
+
+        const prefersCoarse = window.matchMedia("(pointer: coarse)").matches;
+        const supportsTilt = "DeviceOrientationEvent" in window;
+        if (prefersCoarse && supportsTilt) {
+            tiltBtn.classList.remove("hidden");
+        }
+
+        tiltBtn.addEventListener("click", enableTilt);
+
+        resizeCanvas();
+        window.addEventListener("resize", () => {
+            resizeCanvas();
+            draw(state);
+        });
+
+        syncUI();
+        draw(state);
+
+        window.addEventListener("beforeunload", () => clearInterval(interval));
+    </script>
+</body>
+</html>
